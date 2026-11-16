@@ -93,11 +93,39 @@ function renderList(){
  });
 }
 function updateControls(on){['prevBtn','nextBtn','pageInput','zoomOut','zoomIn','removeBtn'].forEach(id=>$(id).disabled=!on)}
-async function loadLibrary(){
- if(!session){books=[];current=null;renderList();updateControls(false);return}
- const {data,error}=await supabase.from('books').select('id,user_id,title,file_path,file_size,current_page,created_at').eq('user_id',session.user.id).order('created_at',{ascending:false});
- if(error)throw error;books=data||[];current=null;renderList();
+
+async function loadLibrary() {
+  if (!session) {
+    books = [];
+    current = null;
+    renderList();
+    updateControls(false);
+    setStatus('Chưa có phiên đăng nhập.');
+    return;
+  }
+
+  setStatus('Đang tải thư viện... UID: ' + session.user.id);
+
+  const { data, error } = await supabase
+    .from('books')
+    .select('id,user_id,title,file_path,file_size,current_page,created_at')
+    .eq('user_id', session.user.id)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Lỗi tải thư viện:', error);
+    setStatus('Lỗi tải thư viện: ' + error.message);
+    throw error;
+  }
+
+  books = data || [];
+  current = null;
+  renderList();
+  updateControls(false);
+
+  setStatus('Tải thành công: ' + books.length + ' sách. UID: ' + session.user.id);
 }
+
 async function showPDF(){
  if(!current)return;
  $('bookTitle').textContent=current.title;
