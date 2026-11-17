@@ -183,9 +183,8 @@ async function showPDF(){
   const pages=document.createElement('div');pages.className='pdf-pages';viewer.append(pages);
   const pdfPage=await pdfDoc.getPage(page);const base=pdfPage.getViewport({scale:1});
   const available=Math.max(300,viewer.clientWidth-44);const scale=Math.min(2.5,Math.max(.5,(available/base.width)*zoom));
-  const viewport=pdfPage.getViewport({scale});const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');
-  canvas.width=Math.floor(viewport.width);canvas.height=Math.floor(viewport.height);canvas.style.width=viewport.width+'px';canvas.style.height=viewport.height+'px';pages.append(canvas);
-  renderTask=pdfPage.render({canvasContext:ctx,viewport});await renderTask.promise;renderTask=null;
+  const viewport=pdfPage.getViewport({scale});const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');const outputScale=Math.min(window.devicePixelRatio||1,3);canvas.width=Math.floor(viewport.width*outputScale);canvas.height=Math.floor(viewport.height*outputScale);canvas.style.width=viewport.width+'px';canvas.style.height=viewport.height+'px';ctx.setTransform(outputScale,0,0,outputScale,0,0);pages.append(canvas);
+renderTask=pdfPage.render({canvasContext:ctx,viewport});await renderTask.promise;renderTask=null;
   setStatus('Đang đọc trang '+page+' / '+pageCount+' · Đã đồng bộ thư viện');
   $('prevBtn').disabled=page<=1;$('nextBtn').disabled=page>=pageCount;
  }catch(err){console.error(err);$('viewer').innerHTML='<div class="welcome"><div class="welcome-inner"><h2>Không mở được PDF</h2><p>Kiểm tra quyền Storage, kết nối Internet hoặc tính hợp lệ của file PDF.</p></div></div>';setStatus('Lỗi tải PDF: '+(err.message||err));}
