@@ -51,7 +51,7 @@ body.reader-fullscreen .toolbar {
   gap: 10px;
   flex-wrap: nowrap;
 }
-body.reader-fullscreen .toolbar > :not(.book-title):not(#fullscreenBtn) {
+body.reader-fullscreen .toolbar > :not(.book-title):not(#fullscreenBtn):not(#continuousBtn) {
   display: none !important;
 }
 body.reader-fullscreen .book-title {
@@ -87,6 +87,100 @@ body.reader-fullscreen .footer { display: none !important; }
 }
 
 @media (max-width:760px){.layout{display:flex;flex-direction:column;height:auto;min-height:calc(100vh - 66px);padding:10px;gap:12px}.sidebar{min-height:0;max-height:none;height:auto;overflow:visible}.book-list{display:flex;flex-direction:column;gap:8px;max-height:280px;overflow-y:auto}.book{width:100%;min-width:0}.reader{height:72vh;min-height:480px;width:100%}.book-title{max-width:100%;width:100%;order:-1}.toolbar{gap:6px;flex-wrap:wrap}.footer{font-size:11px}}
+
+/* Reading comfort palette */
+:root{
+  --reading-bg:#f3efe6;
+  --reading-paper:#fbf8f0;
+  --reading-ink:#292a27;
+  --reading-muted:#77766f;
+  --reading-line:#ded8cc;
+}
+body{
+  color:var(--reading-ink);
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+.reader{
+  background:var(--reading-bg);
+}
+.toolbar{
+  background:#f1eee7;
+  color:var(--reading-ink);
+  border-color:var(--reading-line);
+}
+.toolbar button,
+.toolbar input{
+  color:var(--reading-ink);
+  background:#faf8f2;
+  border-color:#d8d1c4;
+}
+.toolbar button:active,
+.toolbar button:focus-visible{
+  border-color:#9a8b70;
+  outline-color:#9a8b70;
+}
+.viewer{
+  background:var(--reading-bg)!important;
+}
+.pdf-pages canvas{
+  background:var(--reading-paper)!important;
+  filter:sepia(.10) contrast(.97);
+}
+.reader-page-indicator{
+  background:var(--reading-bg)!important;
+  color:var(--reading-muted)!important;
+  border-color:var(--reading-line)!important;
+}
+.footer{
+  background:#f1eee7;
+  color:var(--reading-muted);
+  border-color:var(--reading-line);
+}
+body.reader-fullscreen .toolbar{
+  background:#f1eee7;
+}
+body.reader-fullscreen .viewer{
+  background:var(--reading-bg)!important;
+}
+body.reader-fullscreen .reader-page-indicator{
+  background:var(--reading-bg)!important;
+}
+
+
+body.reader-fullscreen #continuousBtn{
+  display:inline-flex!important;
+  flex:none;
+  white-space:nowrap;
+}
+body.reader-fullscreen #continuousBtn[hidden]{
+  display:none!important;
+}
+.continuous-page{
+  display:block;
+  width:100%;
+  max-width:100%;
+  margin:0 auto;
+  overflow:hidden;
+  background:var(--reading-paper,#fbf8f0);
+}
+.continuous-page canvas{
+  display:block;
+  width:100%;
+  height:auto;
+  max-width:100%;
+}
+body.reader-fullscreen .viewer.continuous-mode{
+  display:block;
+  overflow-y:auto;
+  overflow-x:hidden;
+  padding:0;
+}
+body.reader-fullscreen .viewer.continuous-mode .pdf-pages{
+  display:block;
+  width:100%;
+  margin:0;
+}
+
 </style>
 </head>
 <body>
@@ -114,6 +208,7 @@ body.reader-fullscreen .footer { display: none !important; }
     <div class="pagebox"><input id="pageInput" type="number" min="1" value="1" disabled><span id="pageTotal">/ —</span></div>
     <button id="nextBtn" disabled>Trang sau →</button>
     <button id="zoomOut" disabled>−</button><button id="zoomIn" disabled>＋</button>
+    <button id="continuousBtn" type="button" disabled hidden>Đọc liên tục: Tắt</button>
     <button id="fullscreenBtn" type="button" disabled>⛶ Toàn màn hình</button>
     <button id="removeBtn" disabled>Xóa sách</button>
   </div>
@@ -129,7 +224,7 @@ const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_NQklvTI6JmHJrrzk-STHlA_V0gnsnFF
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 const BUCKET = 'books';
 const DB_NAME='pdf-reader-library', STORE='books';
-let db, books=[], current=null, page=1, zoom=1, pdfDoc=null, renderTask=null, loadingTask=null, pageCount=null, session=null;
+let db, books=[], current=null, page=1, zoom=1, pdfDoc=null, renderTask=null, loadingTask=null, pageCount=null, session=null, continuousReading=false, continuousObserver=null, continuousSaveTimer=null, continuousScrollHandler=null;
 const $=id=>document.getElementById(id);
 function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,1);req.onupgradeneeded=()=>req.result.createObjectStore(STORE,{keyPath:'id'});req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
 function tx(mode='readonly'){return db.transaction(STORE,mode).objectStore(STORE)}
@@ -159,7 +254,7 @@ function renderList(){
   info.append(name,meta);el.append(cover,info);el.onclick=()=>selectBook(b.id);list.append(el);
  });
 }
-function updateControls(on){['prevBtn','nextBtn','pageInput','zoomOut','zoomIn','fullscreenBtn','removeBtn'].forEach(id=>$(id).disabled=!on)}
+function updateControls(on){['prevBtn','nextBtn','pageInput','zoomOut','zoomIn','fullscreenBtn','continuousBtn','removeBtn'].forEach(id=>$(id).disabled=!on)}
 
 async function loadLibrary() {
   if (!session) {
@@ -193,6 +288,98 @@ async function loadLibrary() {
   setStatus('Tải thành công: ' + books.length + ' sách. UID: ' + session.user.id);
 }
 
+
+async function renderContinuousPages(viewer,pages){
+ if(continuousObserver){continuousObserver.disconnect();continuousObserver=null}
+ if(continuousScrollHandler)viewer.removeEventListener('scroll',continuousScrollHandler);
+ viewer.classList.add('continuous-mode');
+ const pageElements=[],pageProxies=[];
+ for(let n=1;n<=pageCount;n++){
+  const wrap=document.createElement('div');
+  wrap.className='continuous-page';
+  wrap.dataset.page=String(n);
+  wrap.setAttribute('aria-label','Trang '+n);
+  const proxy=await pdfDoc.getPage(n);
+  const base=proxy.getViewport({scale:1});
+  wrap.style.aspectRatio=base.width+' / '+base.height;
+  pages.append(wrap);
+  pageElements.push(wrap);
+  pageProxies.push(proxy);
+ }
+ const renderPage=async(n)=>{
+  const wrap=pageElements[n-1];
+  if(!wrap||wrap.dataset.rendered==='1'||wrap.dataset.rendering==='1')return;
+  wrap.dataset.rendering='1';
+  try{
+   const pdfPage=pageProxies[n-1];
+   const base=pdfPage.getViewport({scale:1});
+   const available=Math.max(280,viewer.clientWidth);
+   const scale=Math.min(2.5,Math.max(.5,(available/base.width)*zoom));
+   const viewport=pdfPage.getViewport({scale});
+   wrap.style.aspectRatio=base.width+' / '+base.height;
+   const canvas=document.createElement('canvas');
+   const ctx=canvas.getContext('2d');
+   const outputScale=Math.min(window.devicePixelRatio||1,3);
+   canvas.width=Math.floor(viewport.width*outputScale);
+   canvas.height=Math.floor(viewport.height*outputScale);
+   canvas.style.width='100%';
+   canvas.style.height='auto';
+   ctx.setTransform(outputScale,0,0,outputScale,0,0);
+   wrap.append(canvas);
+   const task=pdfPage.render({canvasContext:ctx,viewport});
+   await task.promise;
+   wrap.dataset.rendered='1';
+  }catch(err){
+   console.error('Không render được trang '+n,err);
+   wrap.textContent='Không thể hiển thị trang '+n;
+  }finally{
+   delete wrap.dataset.rendering;
+  }
+ };
+ continuousObserver=new IntersectionObserver(entries=>{
+  entries.forEach(entry=>{
+   if(entry.isIntersecting){
+    const n=Number(entry.target.dataset.page);
+    renderPage(n);
+   }
+  });
+ },{root:viewer,rootMargin:'1200px 0px',threshold:0});
+ pageElements.forEach(el=>continuousObserver.observe(el));
+
+ const updateCurrentPage=()=>{
+  const center=viewer.scrollTop+viewer.clientHeight/2;
+  let nearest=1,best=Infinity;
+  pageElements.forEach((el,i)=>{
+   const elCenter=el.offsetTop+el.offsetHeight/2;
+   const distance=Math.abs(elCenter-center);
+   if(distance<best){best=distance;nearest=i+1}
+  });
+  if(nearest!==page){
+   page=nearest;
+   $('pageInput').value=page;
+   $('readerPageIndicator').textContent='Trang '+page+' / '+pageCount;
+   setStatus('Đang đọc trang '+page+' / '+pageCount+' · Chế độ đọc liên tục');
+   current.current_page=page;
+   if(continuousSaveTimer)clearTimeout(continuousSaveTimer);
+   continuousSaveTimer=setTimeout(async()=>{
+    if(!current||!session)return;
+    const {error}=await supabase.from('books').update({current_page:page}).eq('id',current.id).eq('user_id',session.user.id);
+    if(error){console.error(error);return}
+    renderList();
+   },800);
+  }
+ };
+ continuousScrollHandler=updateCurrentPage;
+ viewer.addEventListener('scroll',continuousScrollHandler,{passive:true});
+
+ // Jump to the saved/current page after the page placeholders have been created.
+ requestAnimationFrame(()=>{
+  const target=pageElements[Math.max(0,Math.min(pageCount-1,page-1))];
+  if(target)viewer.scrollTop=Math.max(0,target.offsetTop-(viewer.offsetTop||0));
+  updateCurrentPage();
+ });
+}
+
 async function showPDF(){
  if(!current)return;
  $('bookTitle').textContent=current.title;
@@ -209,8 +396,17 @@ async function showPDF(){
   pdfDoc=await loadingTask.promise;pageCount=pdfDoc.numPages;
   page=Math.min(Math.max(1,page),pageCount);
   $('pageTotal').textContent='/ '+pageCount;$('pageInput').value=page;$('readerPageIndicator').textContent='Trang '+page+' / '+pageCount;
-  const viewer=$('viewer');viewer.innerHTML='';
+  const viewer=$('viewer');viewer.innerHTML='';viewer.classList.remove('continuous-mode');
+  $('continuousBtn').hidden=!document.body.classList.contains('reader-fullscreen');
+  $('continuousBtn').textContent=continuousReading?'Đọc liên tục: Bật':'Đọc liên tục: Tắt';
   const pages=document.createElement('div');pages.className='pdf-pages';viewer.append(pages);
+  if(continuousReading){
+   await renderContinuousPages(viewer,pages);
+   $('prevBtn').disabled=page<=1;$('nextBtn').disabled=page>=pageCount;
+   return;
+  }
+  if(continuousObserver){continuousObserver.disconnect();continuousObserver=null}
+  if(continuousScrollHandler){viewer.removeEventListener('scroll',continuousScrollHandler);continuousScrollHandler=null}
   const pdfPage=await pdfDoc.getPage(page);const base=pdfPage.getViewport({scale:1});
   const available=Math.max(300,viewer.clientWidth);const scale=Math.min(2.5,Math.max(.5,(available/base.width)*zoom));
   const viewport=pdfPage.getViewport({scale});const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');const outputScale=Math.min(window.devicePixelRatio||1,3);canvas.width=Math.floor(viewport.width*outputScale);canvas.height=Math.floor(viewport.height*outputScale);canvas.style.width=viewport.width+'px';canvas.style.height=viewport.height+'px';ctx.setTransform(outputScale,0,0,outputScale,0,0);pages.append(canvas);
@@ -227,7 +423,7 @@ async function savePage(){
 }
 $('signInBtn').onclick=async()=>{const email=$('emailInput').value.trim(),password=$('passwordInput').value;if(!email||!password){alert('Nhập email và mật khẩu.');return}const {data,error}=await supabase.auth.signInWithPassword({email,password});if(error){authMessage(error);return}session=data.session;updateAuthUI();try{await loadLibrary();setStatus('Đăng nhập thành công.')}catch(e){authMessage(e)}};
 $('signUpBtn').onclick=async()=>{const email=$('emailInput').value.trim(),password=$('passwordInput').value;if(!email||password.length<6){alert('Nhập email hợp lệ và mật khẩu tối thiểu 6 ký tự.');return}const {data,error}=await supabase.auth.signUp({email,password});if(error){authMessage(error);return}if(data.session){session=data.session;updateAuthUI();await loadLibrary();setStatus('Đăng ký thành công.')}else{alert('Đã gửi email xác nhận. Hãy mở email để xác nhận tài khoản, sau đó quay lại đăng nhập.');setStatus('Chờ xác nhận email.')}};
-$('signOutBtn').onclick=async()=>{const {error}=await supabase.auth.signOut();if(error){authMessage(error);return}session=null;books=[];current=null;updateAuthUI();renderList();updateControls(false);$('bookTitle').textContent='Chưa chọn sách';$('readerPageIndicator').textContent='Trang — / —';$('viewer').innerHTML='<div class="welcome"><div class="welcome-inner"><h2>Không gian đọc sách</h2><p>Đăng nhập để mở thư viện của bạn.</p></div></div>';setStatus('Đã đăng xuất.')};
+$('signOutBtn').onclick=async()=>{const {error}=await supabase.auth.signOut();if(error){authMessage(error);return}session=null;books=[];current=null;continuousReading=false;if(continuousObserver){continuousObserver.disconnect();continuousObserver=null}updateAuthUI();renderList();updateControls(false);$('bookTitle').textContent='Chưa chọn sách';$('readerPageIndicator').textContent='Trang — / —';$('viewer').innerHTML='<div class="welcome"><div class="welcome-inner"><h2>Không gian đọc sách</h2><p>Đăng nhập để mở thư viện của bạn.</p></div></div>';setStatus('Đã đăng xuất.')};
 // Phiên đăng nhập được khôi phục khi mở ứng dụng bằng getSession().
 $('fileInput').addEventListener('change',async e=>{
  const file=e.target.files[0];if(!file)return;
@@ -249,14 +445,25 @@ $('viewer').ontouchstart=e=>{window.swipeX=e.changedTouches[0].screenX;window.sw
 $('viewer').ontouchend=e=>{let dx=e.changedTouches[0].screenX-window.swipeX,dy=e.changedTouches[0].screenY-window.swipeY;if(Math.abs(dx)<60||Math.abs(dx)<Math.abs(dy)||!current||!pageCount)return;if(dx<0&&page<pageCount){page++;saveCurrentPageAndRender()}else if(dx>0&&page>1){page--;saveCurrentPageAndRender()}};
 $('pageInput').addEventListener('change',savePage);$('pageInput').addEventListener('keydown',e=>{if(e.key==='Enter')savePage()});
 $('zoomIn').onclick=()=>{zoom=Math.min(zoom+.2,2.5);showPDF()};$('zoomOut').onclick=()=>{zoom=Math.max(zoom-.2,.5);showPDF()};
-$('removeBtn').onclick=async()=>{if(!current||!session||!confirm('Xóa "'+current.title+'" khỏi thư viện trực tuyến?'))return;const item=current;const {error:storageError}=await supabase.storage.from(BUCKET).remove([item.file_path]);if(storageError){authMessage(storageError);return}const {error}=await supabase.from('books').delete().eq('id',item.id).eq('user_id',session.user.id);if(error){authMessage(error);return}current=null;await loadLibrary();$('bookTitle').textContent='Chưa chọn sách';$('readerPageIndicator').textContent='Trang — / —';$('viewer').innerHTML='<div class="welcome"><div class="welcome-inner"><h2>Không gian đọc sách</h2><p>Chọn một cuốn sách trong thư viện hoặc tải PDF mới.</p></div></div>';$('pageTotal').textContent='/ —';$('readerPageIndicator').textContent='Trang — / —';updateControls(false);setStatus('Đã xóa sách.')};
+$('removeBtn').onclick=async()=>{if(!current||!session||!confirm('Xóa "'+current.title+'" khỏi thư viện trực tuyến?'))return;const item=current;const {error:storageError}=await supabase.storage.from(BUCKET).remove([item.file_path]);if(storageError){authMessage(storageError);return}const {error}=await supabase.from('books').delete().eq('id',item.id).eq('user_id',session.user.id);if(error){authMessage(error);return}current=null;continuousReading=false;if(continuousObserver){continuousObserver.disconnect();continuousObserver=null}await loadLibrary();$('bookTitle').textContent='Chưa chọn sách';$('readerPageIndicator').textContent='Trang — / —';$('viewer').innerHTML='<div class="welcome"><div class="welcome-inner"><h2>Không gian đọc sách</h2><p>Chọn một cuốn sách trong thư viện hoặc tải PDF mới.</p></div></div>';$('pageTotal').textContent='/ —';$('readerPageIndicator').textContent='Trang — / —';updateControls(false);setStatus('Đã xóa sách.')};
 $('fullscreenBtn').onclick=async()=>{
  const entering=!document.body.classList.contains('reader-fullscreen');
  document.body.classList.toggle('reader-fullscreen',entering);
  $('fullscreenBtn').textContent=entering?'⤢ Thu nhỏ':'⛶ Toàn màn hình';
+ $('continuousBtn').hidden=!entering;
  // Chờ CSS cập nhật kích thước vùng đọc rồi mới render lại PDF.
  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+ if(!entering&&continuousReading){
+  continuousReading=false;
+  $('continuousBtn').textContent='Đọc liên tục: Tắt';
+ }
  if(current) await showPDF();
+};
+$('continuousBtn').onclick=async()=>{
+ if(!document.body.classList.contains('reader-fullscreen')||!current)return;
+ continuousReading=!continuousReading;
+ $('continuousBtn').textContent=continuousReading?'Đọc liên tục: Bật':'Đọc liên tục: Tắt';
+ await showPDF();
 };
 $('themeBtn').onclick=()=>{const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';$('themeBtn').textContent=dark?'☀ Giao diện sáng':'☾ Giao diện tối';localStorage.setItem('pdf-reader-theme',dark?'dark':'light')};
 (async()=>{try{db=await openDB();const {data}=await supabase.auth.getSession();session=data.session;updateAuthUI();if(session)await loadLibrary();else renderList();const saved=localStorage.getItem('pdf-reader-theme');if(saved==='dark'){$('themeBtn').click()}}catch(e){setStatus('Lỗi khởi tạo: '+(e.message||e));}})();
