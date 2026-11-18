@@ -246,6 +246,8 @@ async function renderContinuousPages(viewer,pages){
  for(let n=1;n<=pageCount;n++){
   const wrap=document.createElement('div');
   wrap.className='continuous-page';
+  wrap.style.width='100%';
+  wrap.style.flex='0 0 auto';
   wrap.dataset.page=String(n);
   wrap.setAttribute('aria-label','Trang '+n);
   const proxy=await pdfDoc.getPage(n);
@@ -323,10 +325,55 @@ async function renderContinuousPages(viewer,pages){
 
  // Jump to the saved/current page after the page placeholders have been created.
  requestAnimationFrame(()=>{
-  const target=pageElements[Math.max(0,Math.min(pageCount-1,page-1))];
-  if(target)viewer.scrollTop=Math.max(0,target.offsetTop-(viewer.offsetTop||0));
-  updateCurrentPage();
+  requestAnimationFrame(()=>{
+   const target=pageElements[Math.max(0,Math.min(pageCount-1,page-1))];
+   if(target){
+    const viewerRect=viewer.getBoundingClientRect();
+    const targetRect=target.getBoundingClientRect();
+    viewer.scrollTop += targetRect.top-viewerRect.top;
+   }
+   updateCurrentPage();
+  });
  });
+}
+
+
+async function renderSinglePageFromLoadedPDF(){
+ if(!current||!pdfDoc)return;
+ const viewer=$('viewer');
+ if(continuousObserver){continuousObserver.disconnect();continuousObserver=null}
+ if(continuousScrollHandler){viewer.removeEventListener('scroll',continuousScrollHandler);continuousScrollHandler=null}
+ if(continuousSaveTimer){clearTimeout(continuousSaveTimer);continuousSaveTimer=null}
+ if(renderTask){try{renderTask.cancel()}catch(e){}renderTask=null}
+ viewer.innerHTML='';
+ viewer.classList.remove('continuous-mode');
+ const pages=document.createElement('div');
+ pages.className='pdf-pages';
+ viewer.append(pages);
+ page=Math.max(1,Math.min(pageCount,page));
+ const pdfPage=await pdfDoc.getPage(page);
+ const base=pdfPage.getViewport({scale:1});
+ const available=Math.max(300,viewer.clientWidth);
+ const scale=Math.min(2.5,Math.max(.5,(available/base.width)*zoom));
+ const viewport=pdfPage.getViewport({scale});
+ const canvas=document.createElement('canvas');
+ const ctx=canvas.getContext('2d');
+ const outputScale=Math.min(window.devicePixelRatio||1,3);
+ canvas.width=Math.floor(viewport.width*outputScale);
+ canvas.height=Math.floor(viewport.height*outputScale);
+ canvas.style.width=viewport.width+'px';
+ canvas.style.height=viewport.height+'px';
+ ctx.setTransform(outputScale,0,0,outputScale,0,0);
+ pages.append(canvas);
+ renderTask=pdfPage.render({canvasContext:ctx,viewport});
+ await renderTask.promise;
+ renderTask=null;
+ $('pageInput').value=page;
+ $('pageTotal').textContent='/ '+pageCount;
+ $('readerPageIndicator').textContent='Trang '+page+' / '+pageCount;
+ $('prevBtn').disabled=page<=1;
+ $('nextBtn').disabled=page>=pageCount;
+ setStatus('Đang đọc trang '+page+' / '+pageCount+' · Đã đồng bộ thư viện');
 }
 
 async function showPDF(){
@@ -409,19 +456,42 @@ $('fullscreenBtn').onclick=async()=>{
  if(current) await showPDF();
 };
 $('continuousBtn').onclick=async()=>{
- if(!document.body.classList.contains('reader-fullscreen')||!current)return;
- if(continuousReading){
-  captureContinuousPage();
-  if(continuousSaveTimer){clearTimeout(continuousSaveTimer);continuousSaveTimer=null}
-  const pageToKeep=page;
-  continuousReading=false;
-  $('continuousBtn').textContent='Đọc liên tục: Tắt';
-  await showPDF();
-  page=pageToKeep;
- }else{
-  continuousReading=true;
-  $('continuousBtn').textContent='Đọc liên tục: Bật';
-  await showPDF();
+ if(!document.body.classList.contains('reader-fullscreen')||!current||!pdfDoc)return;
+ const btn=$('continuousBtn');
+ btn.disabled=true;
+ try{
+  if(!continuousReading){
+   // Preserve the current single-page number, then build the continuous view from the loaded PDF.
+   page=Math.max(1,Math.min(pageCount,Number($('pageInput').value)||page));
+   continuousReading=true;
+   btn.textContent='Đọc liên tục: Bật';
+   const viewer=$('viewer');
+   viewer.innerHTML='';
+   const pages=document.createElement('div');
+   pages.className='pdf-pages';
+   viewer.append(pages);
+   await renderContinuousPages(viewer,pages);
+  }else{
+   // Capture the page actually visible in the continuous viewport before changing layout.
+   captureContinuousPage();
+   const pageToKeep=Math.max(1,Math.min(pageCount,page));
+   if(continuousSaveTimer){clearTimeout(continuousSaveTimer);continuousSaveTimer=null}
+   if(session&&current){
+    const {error}=await supabase.from('books').update({current_page:pageToKeep}).eq('id',current.id).eq('user_id',session.user.id);
+    if(error)console.error('Không lưu được vị trí đọc:',error);
+    current.current_page=pageToKeep;
+   }
+   page=pageToKeep;
+   continuousReading=false;
+   btn.textContent='Đọc liên tục: Tắt';
+   await renderSinglePageFromLoadedPDF();
+   renderList();
+  }
+ }catch(err){
+  console.error('Lỗi chuyển chế độ đọc:',err);
+  setStatus('Không thể chuyển chế độ đọc: '+(err.message||err));
+ }finally{
+  btn.disabled=false;
  }
 };
 $('themeBtn').onclick=()=>{const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';$('themeBtn').textContent=dark?'☀ Giao diện sáng':'☾ Giao diện tối';localStorage.setItem('pdf-reader-theme',dark?'dark':'light')};
@@ -429,3 +499,43 @@ $('themeBtn').onclick=()=>{const dark=document.documentElement.dataset.theme!=='
 </script>
 </body>
 </html>
+
+<style>
+/* Continuous mode must behave as a real vertical scroll document. */
+.viewer.continuous-mode {
+  display: block !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 0 !important;
+  background: #fff !important;
+}
+.viewer.continuous-mode .pdf-pages {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  width: 100% !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+}
+.viewer.continuous-mode .continuous-page {
+  display: block;
+  width: 100%;
+  flex: 0 0 auto;
+  padding: 0;
+  background: #fff;
+}
+.viewer.continuous-mode .continuous-page canvas {
+  display: block;
+  width: 100% !important;
+  height: auto !important;
+  max-width: 100%;
+}
+</style>
+
+<style>
+body.reader-fullscreen .viewer.continuous-mode {
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+}
+</style>
